@@ -371,6 +371,11 @@ fn main() {
             Ok(())
         })
         .on_window_event(|w, e| {
+            // 失去焦点时自动取消快捷键录制，防止切到其他软件后误吞误录按键
+            if w.label() == "main" && matches!(e, WindowEvent::Focused(false)) {
+                let st = w.state::<AppState>();
+                st.hk.recording.store(false, Ordering::Relaxed);
+            }
             // 先禁用电平表，再结束 Compare，避免回到 Idle 时 refresh_meter 瞬间重开麦。
             if w.label() == "main" && matches!(e, WindowEvent::Destroyed | WindowEvent::CloseRequested { .. }) {
                 let st = w.state::<AppState>();

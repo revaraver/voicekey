@@ -92,7 +92,18 @@ pub struct Shortcut {
 
 impl Shortcut {
     pub fn is_modifier(&self) -> bool {
-        voicekey_platform::modifier(self.code).is_some()
+        self.mods == 0 && voicekey_platform::modifier(self.code).is_some()
+    }
+
+    pub fn is_mod_combo(&self) -> bool {
+        self.mods != 0 && voicekey_platform::modifier(self.code).is_some()
+    }
+
+    pub fn mod_combo_mask(&self) -> Option<u8> {
+        if self.mods == 0 {
+            return None;
+        }
+        voicekey_platform::modifier(self.code).map(|(f, _)| self.mods | f)
     }
 
     pub fn title(&self) -> String {
@@ -165,6 +176,12 @@ pub struct Settings {
     pub strip_punctuation: bool,
     /// 识别不到输入位置时仍直接粘贴（不只复制）；默认关闭，可能贴到错误位置
     pub force_paste_without_target: bool,
+    /// 显示录音底部悬浮窗；默认开启，可在设置中关闭
+    pub hud_enabled: bool,
+    /// 精简悬浮窗：隐藏左侧图标与声波动画；默认开启
+    pub hud_minimal: bool,
+    /// 剪贴板保留策略：always | on_fail | on_success
+    pub clipboard_mode: String,
 }
 
 impl Default for Settings {
@@ -198,6 +215,9 @@ impl Default for Settings {
             history_limit: HISTORY_LIMIT_DEFAULT,
             strip_punctuation: false,
             force_paste_without_target: false,
+            hud_enabled: true,
+            hud_minimal: true,
+            clipboard_mode: "on_fail".into(),
         }
     }
 }
@@ -226,7 +246,7 @@ impl Settings {
             self.channel = Channel::Doubao;
         }
         let custom = self.hold_key == CUSTOM_HOLD && self.hold_combo.as_ref().is_some_and(|c| crate::hotkey::valid_hold(&c.codes));
-        if !custom && !voicekey_platform::hold_keys().iter().any(|k| k.id == self.hold_key) {
+        if self.hold_key != "none" && !custom && !voicekey_platform::hold_keys().iter().any(|k| k.id == self.hold_key) {
             self.hold_key = voicekey_platform::hold_keys()[0].id.into();
         }
         self.silence = self.silence.clamp(1.0, 5.0);

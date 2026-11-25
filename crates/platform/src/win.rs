@@ -15,7 +15,11 @@ use windows::Win32::System::Com::{
 use windows::Win32::System::DataExchange::GetClipboardSequenceNumber;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Variant::VARIANT;
-use windows::Win32::UI::Accessibility::{AccessibleObjectFromWindow, IAccessible};
+use windows::Win32::UI::Accessibility::{
+    AccessibleObjectFromWindow, CUIAutomation, IAccessible, IUIAutomation, IUIAutomationElement,
+    IUIAutomationTextPattern, IUIAutomationValuePattern, UIA_ComboBoxControlTypeId,
+    UIA_DocumentControlTypeId, UIA_EditControlTypeId, UIA_TextPatternId, UIA_ValuePatternId,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
     KEYEVENTF_UNICODE, MAPVK_VK_TO_CHAR, VIRTUAL_KEY,
@@ -148,7 +152,7 @@ pub(crate) fn backspace(n: usize) {
     send(&inputs);
 }
 
-pub(crate) fn type_text(text: &str) {
+pub fn type_text(text: &str) {
     let inputs: Vec<INPUT> = text
         .encode_utf16()
         .flat_map(|u| [key_input(0, u, KEYEVENTF_UNICODE), key_input(0, u, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP)])
@@ -194,6 +198,91 @@ pub fn paste(text: &str) {
     });
 }
 
+/// 借剪贴板 + Ctrl+V 上屏，并将识别结果保留在剪贴板中（不恢复原剪贴板，允许进入剪贴板历史）
+pub fn paste_keep(text: &str) {
+    let Ok(mut cb) = arboard::Clipboard::new() else {
+        type_text(text);
+        return;
+    };
+    if cb.set_text(text).is_err() {
+        type_text(text);
+        return;
+    }
+    send(&[
+        key_input(0x11, 0, KEYBD_EVENT_FLAGS(0)),
+        key_input(0x56, 0, KEYBD_EVENT_FLAGS(0)),
+        key_input(0x56, 0, KEYEVENTF_KEYUP),
+        key_input(0x11, 0, KEYEVENTF_KEYUP),
+    ]);
+}
+
+unsafe fn uia_focused_element() -> Option<IUIAutomationElement> {
+    let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+    let uia: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_ALL).ok()?;
+    uia.GetFocusedElement().ok()
+}
+
+fn uia_focused_text() -> Option<String> {
+    unsafe {
+        let el = uia_focused_element()?;
+        if let Ok(vp) = el.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId) {
+            if let Ok(val) = vp.CurrentValue() {
+                return Some(val.to_string());
+            }
+        }
+        if let Ok(tp) = el.GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId) {
+            if let Ok(range) = tp.DocumentRange() {
+                if let Ok(txt) = range.GetText(65536) {
+                    return Some(txt.to_string());
+                }
+            }
+        }
+        None
+    }
+}
+
+fn uia_focused_editable() -> bool {
+    unsafe {
+        let Some(el) = uia_focused_element() else {
+            return false;
+        };
+        let Ok(ct) = el.CurrentControlType() else {
+            return false;
+        };
+        if ct == UIA_EditControlTypeId {
+            if let Ok(vp) = el.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId) {
+                if let Ok(ro) = vp.CurrentIsReadOnly() {
+                    return !ro.as_bool();
+                }
+            }
+            return true;
+        }
+        if ct == UIA_ComboBoxControlTypeId || ct == UIA_DocumentControlTypeId {
+            if let Ok(vp) = el.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId) {
+                if let Ok(ro) = vp.CurrentIsReadOnly() {
+                    return !ro.as_bool();
+                }
+            }
+        }
+        false
+    }
+}
+
+/// 纯 SendInput 上屏并验证目标输入框文本是否真的变化；若证实未打进去则返回 false 供调用方写入剪贴板兜底
+pub fn type_text_verified(text: &str) -> bool {
+    let before = uia_focused_text();
+    type_text(text);
+    if let Some(before_txt) = before {
+        std::thread::sleep(Duration::from_millis(80));
+        if let Some(after_txt) = uia_focused_text() {
+            if after_txt == before_txt {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 /// 当前输入焦点的插入符屏幕坐标（物理像素）：先取 Win32 caret，再取 MSAA caret（Chromium 等）
 pub fn caret() -> Option<Rect> {
     unsafe {
@@ -233,25 +322,25 @@ pub fn secure_input() -> bool {
     false
 }
 
-/// 焦点处是否接受文本。取到插入符必定可输入；取不到时拿不准（微信、Windows Terminal 等自绘
-/// 输入框不提供系统插入符），与 macOS 一致按可输入处理。只有能确认焦点在桌面、任务栏或
-/// 资源管理器文件列表这类不收文字的地方时才返回 false，避免退格键送进去误删文件。
+/// 严格检测焦点处是否真正接受文本输入：
+/// 1. 排除桌面、任务栏、文件管理器列表；
+/// 2. 有真实系统/MSAA 插入符 caret() -> true；
+/// 3. UIA 焦点元素为可编辑输入框（Edit / 可写 ComboBox / 可写 Document）-> true；
+/// 4. 终端/微信等自绘聊天窗口白名单 -> true；
+/// 5. 其余（浏览器空白处、按钮、失焦面板等）一律返回 false，确保落盘剪贴板不丢字。
 pub fn has_text_target() -> bool {
-    if caret().is_some() {
-        return true;
-    }
     unsafe {
         let fg = GetForegroundWindow();
         if fg.is_invalid() {
             return false;
         }
-        if matches!(class_name(fg).as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd") {
+        let fg_cls = class_name(fg);
+        if matches!(fg_cls.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd") {
             return false;
         }
         let tid = GetWindowThreadProcessId(fg, None);
         let mut gti = GUITHREADINFO { cbSize: std::mem::size_of::<GUITHREADINFO>() as u32, ..Default::default() };
         let focus = if GetGUIThreadInfo(tid, &mut gti).is_ok() && !gti.hwndFocus.is_invalid() { gti.hwndFocus } else { fg };
-        // 焦点或其祖先是外壳文件视图（桌面图标、资源管理器文件列表）或列表/树控件：确定不收文字
         let mut h = focus;
         for _ in 0..8 {
             if h.is_invalid() {
@@ -265,7 +354,17 @@ pub fn has_text_target() -> bool {
                 Err(_) => break,
             }
         }
-        true
+        if caret().is_some() {
+            return true;
+        }
+        if uia_focused_editable() {
+            return true;
+        }
+        // 自绘终端与微信桌面端不提供标准 caret/UIA Edit，放行输入（后续仍有验证兜底）
+        if matches!(fg_cls.as_str(), "CASCADIA_HOSTING_WINDOW_CLASS" | "ConsoleWindowClass" | "WeChatMainWndForPC" | "ChatWnd") {
+            return true;
+        }
+        false
     }
 }
 

@@ -217,11 +217,16 @@ pub(crate) fn backspace(n: usize) {
     }
 }
 
-pub(crate) fn type_text(text: &str) {
+pub fn type_text(text: &str) {
     let units: Vec<u16> = text.encode_utf16().collect();
     for chunk in units.chunks(20) {
         post_key(private_source(), 0, 0, Some(chunk));
     }
+}
+
+pub fn type_text_verified(text: &str) -> bool {
+    type_text(text);
+    true
 }
 
 /// Windows 用于重放被吞掉的修饰键；macOS 不吞修饰键，无需重放
@@ -231,6 +236,13 @@ pub fn inject_key(_code: u32, _down: bool) {}
 /// 调用方多在 tokio 常驻线程上，没有 autorelease pool 兜底，需自行包裹，否则备份的剪贴板数据永不释放。
 pub fn paste(text: &str) {
     objc2::rc::autoreleasepool(|_| paste_inner(text));
+}
+
+pub fn paste_keep(text: &str) {
+    copy(text);
+    unsafe {
+        post_key(CGEventSourceCreate(0), 9, F_CMD, None);
+    }
 }
 
 fn paste_inner(text: &str) {

@@ -12,12 +12,30 @@
     <button class="sw" class:on={s.streaming} disabled={all} onclick={() => save({ streaming: !s.streaming })} aria-label="边说边上屏"></button>
   </div>
   <div class="row">
+    <div class="lbl">显示底部悬浮窗<small>录音和识别时在屏幕底部显示状态胶囊；关闭后彻底隐藏</small></div>
+    <button class="sw" class:on={s.hudEnabled} onclick={() => save({ hudEnabled: !s.hudEnabled })} aria-label="显示底部悬浮窗"></button>
+  </div>
+  {#if s.hudEnabled}
+    <div class="row">
+      <div class="lbl">精简悬浮窗<small>隐藏左侧图标和声波动画，仅保留紧凑提示</small></div>
+      <button class="sw" class:on={s.hudMinimal} onclick={() => save({ hudMinimal: !s.hudMinimal })} aria-label="精简悬浮窗"></button>
+    </div>
+  {/if}
+  <div class="row">
     <div class="lbl">胶囊显示实时文字<small>在屏幕底部胶囊中预览识别内容</small></div>
     <button class="sw" class:on={s.liveText} onclick={() => save({ liveText: !s.liveText })} aria-label="胶囊显示实时文字"></button>
   </div>
   <div class="row">
     <div class="lbl">去除标点<small>上屏前删掉逗号、句号等标点；小数点、千分位、时间和网址中的符号保留</small></div>
     <button class="sw" class:on={s.stripPunctuation} onclick={() => save({ stripPunctuation: !s.stripPunctuation })} aria-label="去除标点"></button>
+  </div>
+  <div class="row">
+    <div class="lbl">剪贴板保留策略<small>控制识别结果何时保留在系统剪贴板，防止焦点丢失导致内容蒸发</small></div>
+    <select class="sel" value={s.clipboardMode ?? "always"} onchange={(e) => save({ clipboardMode: e.currentTarget.value as "always" | "on_fail" | "on_success" })}>
+      <option value="always">所有识别结果都写入剪贴板</option>
+      <option value="on_fail">仅未上屏（焦点丢失）时写入</option>
+      <option value="on_success">仅上屏成功时写入剪贴板</option>
+    </select>
   </div>
   <div class="row">
     <div class="lbl">无输入位置时也强制上屏<small>开启后即使识别不到输入框也会直接粘贴，可能贴到错误位置，默认关闭</small></div>

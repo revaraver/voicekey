@@ -11,7 +11,7 @@ use win as imp;
 
 mod volume;
 
-pub use imp::{caret, copy, front_app, has_text_target, inject_key, paste, secure_input, start_hook, FrontApp};
+pub use imp::{caret, copy, front_app, has_text_target, inject_key, paste, paste_keep, secure_input, start_hook, type_text, type_text_verified, FrontApp};
 pub use volume::OutputVolumeDucker;
 
 pub const CTRL: u8 = 1;

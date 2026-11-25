@@ -511,11 +511,25 @@ fn deliver_text(app: &AppHandle, text: &str, ch: Channel) -> bool {
 }
 
 fn paste_or_copy(app: &AppHandle, text: &str, ch: Channel) -> bool {
-    let force = app.state::<AppState>().settings.read().unwrap().force_paste_without_target;
-    let ok = should_paste(allow_text_input(pf::has_text_target(), pf::secure_input()), force);
+    let (force, clip_mode) = {
+        let state = app.state::<AppState>();
+        let s = state.settings.read().unwrap();
+        (s.force_paste_without_target, s.clipboard_mode.clone())
+    };
+    let mut ok = should_paste(allow_text_input(pf::has_text_target(), pf::secure_input()), force);
     if ok {
-        pf::paste(text);
-    } else {
+        if clip_mode == "always" || clip_mode == "on_success" {
+            pf::paste_keep(text);
+        } else {
+            // on_fail: 纯 SendInput 打字并核验输入框文本是否真变化；未打进则自动兜底写入剪贴板
+            if !pf::type_text_verified(text) {
+                ok = false;
+                pf::copy(text);
+                ui::hud(app, "info", CLIPBOARD_HINT, ch);
+                ui::hud_hide(app, 2600);
+            }
+        }
+    } else if clip_mode != "on_success" {
         pf::copy(text);
         ui::hud(app, "info", CLIPBOARD_HINT, ch);
         ui::hud_hide(app, 2600);

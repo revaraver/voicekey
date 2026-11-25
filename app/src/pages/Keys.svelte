@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { app, save } from "../lib/store.svelte";
   import { call, holdName } from "../lib/api";
 
@@ -13,12 +14,113 @@
   let target = $state<"tap" | "hold">("tap");
   const rec = (t: "tap" | "hold") => app.recording && target === t;
 
+  const MOD_MAP: Record<string, { code: number; flag: number; name: string }> = {
+    ControlLeft: { code: 0xA2, flag: 1, name: "左 Ctrl" },
+    ControlRight: { code: 0xA3, flag: 1, name: "右 Ctrl" },
+    AltLeft: { code: 0xA4, flag: 2, name: "左 Alt" },
+    AltRight: { code: 0xA5, flag: 2, name: "右 Alt" },
+    ShiftLeft: { code: 0xA0, flag: 4, name: "左 Shift" },
+    ShiftRight: { code: 0xA1, flag: 4, name: "右 Shift" },
+    MetaLeft: { code: 0x5B, flag: 8, name: "左 Win" },
+    MetaRight: { code: 0x5C, flag: 8, name: "右 Win" },
+  };
+
+  let peakMods: { code: number; flag: number; name: string }[] = [];
+
+  function stopRecord() {
+    peakMods = [];
+    if (app.recording) {
+      app.recording = false;
+      call("record_shortcut", { on: false, hold: target === "hold" });
+    }
+  }
+
   function record(t: "tap" | "hold") {
     const on = !rec(t);
     target = t;
+    peakMods = [];
     app.recording = on;
     call("record_shortcut", { on, hold: t === "hold" });
   }
+
+  function domKeyName(e: KeyboardEvent): string {
+    if (e.code.startsWith("Key")) return e.code.slice(3);
+    if (e.code.startsWith("Digit")) return e.code.slice(5);
+    if (/^F\d+$/.test(e.code)) return e.code;
+    const map: Record<string, string> = {
+      Space: "Space", Enter: "Enter", Tab: "Tab", Backspace: "Backspace",
+      Delete: "Delete", CapsLock: "CapsLock", Backquote: "`", Minus: "-", Equal: "=",
+      BracketLeft: "[", BracketRight: "]", Backslash: "\\", Semicolon: ";", Quote: "'",
+      Comma: ",", Period: ".", Slash: "/", ArrowUp: "↑", ArrowDown: "↓", ArrowLeft: "←", ArrowRight: "→",
+      Home: "Home", End: "End", PageUp: "PgUp", PageDown: "PgDn",
+    };
+    return map[e.code] ?? (e.key.length === 1 ? e.key.toUpperCase() : e.code);
+  }
+
+  onMount(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!app.recording || mac) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const modInfo = MOD_MAP[e.code];
+      if (modInfo) {
+        if (!peakMods.some((m) => m.code === modInfo.code)) peakMods.push(modInfo);
+        return;
+      }
+      const mods = (e.ctrlKey ? 1 : 0) | (e.altKey ? 2 : 0) | (e.shiftKey ? 4 : 0) | (e.metaKey ? 8 : 0);
+      if (e.code === "Escape" && mods === 0) {
+        stopRecord();
+        return;
+      }
+      const vk = e.keyCode;
+      if (!vk) return;
+      const name = domKeyName(e);
+      if (target === "tap") {
+        save({ tapShortcut: { code: vk, mods, name } });
+      } else {
+        const codes = [...peakMods.map((m) => m.code), vk];
+        const comboName = [...peakMods.map((m) => m.name), name].join(" + ");
+        save({ holdKey: "custom", holdCombo: { codes, name: comboName } });
+      }
+      stopRecord();
+    };
+
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (!app.recording || mac) return;
+      const modInfo = MOD_MAP[e.code];
+      if (!modInfo || peakMods.length === 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const peak = peakMods;
+      peakMods = [];
+      if (target === "tap") {
+        if (peak.length === 1) {
+          save({ tapShortcut: { code: peak[0].code, mods: 0, name: peak[0].name } });
+        } else {
+          const last = peak[peak.length - 1];
+          let mods = 0;
+          for (let i = 0; i < peak.length - 1; i++) mods |= peak[i].flag;
+          save({ tapShortcut: { code: last.code, mods, name: last.name } });
+        }
+      } else {
+        save({
+          holdKey: "custom",
+          holdCombo: { codes: peak.map((m) => m.code), name: peak.map((m) => m.name).join(" + ") },
+        });
+      }
+      stopRecord();
+    };
+
+    const onBlur = () => stopRecord();
+    window.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("keyup", onKeyUp, true);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("keyup", onKeyUp, true);
+      window.removeEventListener("blur", onBlur);
+    };
+  });
 </script>
 
 <h2>快捷键</h2>
@@ -29,6 +131,7 @@
     <h4>长按说话</h4>
     <small>适合短句，松手即识别完成</small>
     <select class="sel" value={s.holdKey} onchange={(e) => save({ holdKey: e.currentTarget.value })}>
+      <option value="none">关闭长按</option>
       {#each app.info!.holdKeys as k}<option value={k.id}>{k.name}</option>{/each}
       {#if s.holdCombo}<option value="custom">{s.holdCombo.name}</option>{/if}
     </select>

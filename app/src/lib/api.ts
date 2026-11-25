@@ -39,7 +39,7 @@ export interface Settings {
   soundEnabled: boolean; soundStart: string; soundProcessing: string; soundError: string;
   autostart: boolean; theme: string; lowerSystemVolume: boolean; lowerSystemVolumePercent: number; onboarded: boolean;
   jev: JevConfig; llm: LlmConfig; historyEnabled: boolean; historyLimit: number; stripPunctuation: boolean;
-  forcePasteWithoutTarget: boolean;
+  forcePasteWithoutTarget: boolean; hudEnabled: boolean; hudMinimal: boolean; clipboardMode: "always" | "on_fail" | "on_success";
 }
 export interface HistoryEntry { text: string; ts: number; channel: Channel; delivered: boolean }
 export interface HistoryView { items: HistoryEntry[]; sel: number; enabled: boolean }
@@ -63,7 +63,7 @@ export const call = invoke;
 export const previewSound = (id: string) => call("preview_sound", { id });
 export const listSounds = () => call<{ id: string; name: string }[]>("list_sounds");
 export const holdName = (s: Settings, keys: AppInfo["holdKeys"]) =>
-  s.holdKey === "custom" ? (s.holdCombo?.name ?? "") : (keys.find((k) => k.id === s.holdKey)?.name ?? "");
+  s.holdKey === "none" ? "已关闭" : s.holdKey === "custom" ? (s.holdCombo?.name ?? "") : (keys.find((k) => k.id === s.holdKey)?.name ?? "");
 export const on = <T>(name: string, f: (p: T) => void): Promise<UnlistenFn> => listen<T>(name, (e) => f(e.payload));
 
 export const CH: Record<Channel, { name: string; short: string; desc: string; tags: string[]; logo: string }> = {

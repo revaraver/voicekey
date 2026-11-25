@@ -159,8 +159,20 @@ fn current_channel<R: Runtime>(app: &AppHandle<R>) -> Channel {
 
 /// 胶囊浮层：state = listen | wait | error | info
 pub fn hud<R: Runtime>(app: &AppHandle<R>, state: &str, text: &str, ch: Channel) {
+    let (enabled, minimal) = {
+        let app_state = app.state::<AppState>();
+        let s = app_state.settings.read().unwrap();
+        (s.hud_enabled, s.hud_minimal)
+    };
+    if !enabled {
+        let _ = app.emit_to("hud", "hud", json!({ "state": "hidden" }));
+        if let Some(w) = app.get_webview_window("hud") {
+            let _ = w.hide();
+        }
+        return;
+    }
     HUD_TOKEN.fetch_add(1, Ordering::Relaxed);
-    let _ = app.emit_to("hud", "hud", json!({ "state": state, "text": text, "channel": ch }));
+    let _ = app.emit_to("hud", "hud", json!({ "state": state, "text": text, "channel": ch, "minimal": minimal }));
     let Some(w) = app.get_webview_window("hud") else { return };
     if !w.is_visible().unwrap_or(false) {
         if let Some(a) = cursor_area(app) {

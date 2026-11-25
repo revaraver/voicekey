@@ -52,15 +52,9 @@ impl Config {
     }
 }
 
-/// 可作长按的组合：纯修饰键；单个 F 键或鼠标中键/侧键；或 修饰键+一个键（只有 Shift 时不行，否则打不了大写）
+/// 可作长按的组合：放开限制，只要至少有一个键即可
 pub fn valid_hold(codes: &[u32]) -> bool {
-    let keys: Vec<u32> = codes.iter().copied().filter(|c| pf::modifier(*c).is_none()).collect();
-    let strong_mod = codes.iter().any(|c| pf::modifier(*c).is_some_and(|(f, _)| f != pf::SHIFT));
-    match keys.as_slice() {
-        [] => !codes.is_empty(),
-        [k] => pf::is_function_key(*k) || pf::is_mouse_button(*k) || strong_mod,
-        _ => false,
-    }
+    !codes.is_empty()
 }
 
 #[derive(Default)]
@@ -98,6 +92,8 @@ struct State {
     held_key: Option<u32>,
     chord_on: bool,
     chord_active: bool,
+    /// 点按纯修饰键组合防抖
+    tap_combo_down: bool,
 }
 
 pub fn start(shared: Arc<Shared>, tx: UnboundedSender<HotEvent>) {
@@ -192,14 +188,50 @@ fn handle(sh: &Shared, st: &Arc<Mutex<State>>, tx: &UnboundedSender<HotEvent>, e
             false
         }
         KeyKind::Modifier(pressed) => {
+            if let Some(t) = cfg.tap.as_ref().filter(|t| t.is_mod_combo()) {
+                if let Some(target_mask) = t.mod_combo_mask() {
+                    let cur_mask = e.mods & MOD_MASK;
+                    if pressed && cur_mask == target_mask {
+                        if !s.tap_combo_down {
+                            s.tap_combo_down = true;
+                            if s.down_code.is_some() && !s.active {
+                                cancel_pending(&mut s, tx);
+                            }
+                            let _ = tx.send(HotEvent::Tap);
+                        }
+                        return false;
+                    } else if !pressed && cur_mask != target_mask {
+                        s.tap_combo_down = false;
+                    }
+                }
+            }
+            // 取消「同键区分长短按」：点按修饰键与长按修饰键彻底解耦，不再吞掉并重放修饰键
             let tap_code = cfg.tap.as_ref().filter(|t| t.is_modifier()).map(|t| t.code);
-            let ours = e.code == s.down_code.unwrap_or(e.code) && (e.code == cfg.hold || Some(e.code) == tap_code);
-            if !ours {
+            let is_tap_mod = Some(e.code) == tap_code;
+            let is_hold_mod = e.code == cfg.hold && !is_tap_mod;
+
+            if is_tap_mod {
+                if pressed {
+                    if !e.repeat && (e.mods & MOD_MASK) == pf::modifier(e.code).map(|(f, _)| f).unwrap_or(0) {
+                        s.down_code = Some(e.code);
+                        s.cancelled = false;
+                    }
+                } else if s.down_code == Some(e.code) {
+                    s.down_code = None;
+                    if !s.cancelled {
+                        let _ = tx.send(HotEvent::Tap);
+                    }
+                }
+                return false;
+            }
+
+            if !is_hold_mod {
                 if s.down_code.is_some() && !s.active {
                     cancel_pending(&mut s, tx);
                 }
                 return false;
             }
+
             if pressed && s.down_code.is_none() {
                 s.down_code = Some(e.code);
                 s.pressed_at = Some(Instant::now());
@@ -207,47 +239,32 @@ fn handle(sh: &Shared, st: &Arc<Mutex<State>>, tx: &UnboundedSender<HotEvent>, e
                 s.tapped = false;
                 s.gen += 1;
                 let _ = tx.send(HotEvent::Press);
-                if e.code == cfg.hold {
-                    let (gen, st, tx) = (s.gen, st.clone(), tx.clone());
-                    std::thread::spawn(move || {
-                        std::thread::sleep(THRESHOLD);
-                        let mut s = st.lock().unwrap();
-                        if s.gen == gen && s.down_code.is_some() && !s.cancelled {
-                            s.active = true;
-                            let _ = tx.send(HotEvent::LongPress);
-                        }
-                    });
-                }
-                s.held_swallowed = cfg!(windows);
-                return s.held_swallowed;
+                let (gen, st, tx) = (s.gen, st.clone(), tx.clone());
+                std::thread::spawn(move || {
+                    std::thread::sleep(THRESHOLD);
+                    let mut s = st.lock().unwrap();
+                    if s.gen == gen && s.down_code.is_some() && !s.cancelled {
+                        s.active = true;
+                        let _ = tx.send(HotEvent::LongPress);
+                    }
+                });
+                return false;
             }
             if pressed {
-                return s.held_swallowed;
+                return false;
             }
-            if s.down_code.is_none() {
+            if s.down_code != Some(e.code) {
                 return false;
             }
             s.down_code = None;
             s.gen += 1;
-            let swallowed = std::mem::take(&mut s.held_swallowed);
             if s.active {
                 s.active = false;
                 let _ = tx.send(HotEvent::Release);
-            } else if Some(e.code) == tap_code
-                && !s.cancelled
-                && s.pressed_at.is_some_and(|t| t.elapsed() < THRESHOLD)
-            {
-                s.tapped = true;
-                let _ = tx.send(HotEvent::Tap);
-            } else if swallowed {
-                let _ = tx.send(HotEvent::Cancel);
-                // 普通短按：原样重放
-                pf::inject_key(e.code, true);
-                pf::inject_key(e.code, false);
             } else {
                 let _ = tx.send(HotEvent::Cancel);
             }
-            swallowed
+            false
         }
     }
 }
@@ -335,7 +352,7 @@ fn picking_key(e: &KeyEvent) -> Option<Special> {
     pf::special(e.code).filter(|&k| k != Special::Tab || e.mods & (MOD_MASK | pf::FN) == 0)
 }
 
-/// 录制下一次按键：单独点按一个修饰键，或按下 修饰键+键、F 键、鼠标中键/侧键；Esc 取消
+/// 录制下一次按键：放开限制，支持任意单键、组合键、纯修饰键组合（如 Ctrl+Shift+Win）、鼠标中键/侧键；Esc 取消
 fn record(sh: &Shared, s: &mut State, tx: &UnboundedSender<HotEvent>, e: &KeyEvent) -> bool {
     let done = |sc: Option<Shortcut>| {
         sh.recording.store(false, Ordering::Relaxed);
@@ -346,25 +363,36 @@ fn record(sh: &Shared, s: &mut State, tx: &UnboundedSender<HotEvent>, e: &KeyEve
             let mods = e.mods & MOD_MASK;
             if pf::special(e.code) == Some(Special::Escape) && mods == 0 {
                 done(None);
-            } else if mods != 0 || pf::is_function_key(e.code) || pf::is_mouse_button(e.code) {
+            } else {
                 done(Some(Shortcut { code: e.code, mods, name: pf::key_name(e) }));
             }
         }
         KeyKind::Modifier(true) => {
-            if s.rec_pending.is_none() && !s.rec_multi {
-                s.rec_pending = Some(e.code);
-            } else {
-                s.rec_pending = None;
-                s.rec_multi = true;
+            if !s.rec_held.iter().any(|(c, _)| *c == e.code) {
+                let k = (e.code, pf::key_name(e));
+                if !s.rec_peak.iter().any(|(c, _)| *c == e.code) {
+                    s.rec_peak.push(k.clone());
+                }
+                s.rec_held.push(k);
             }
         }
         KeyKind::Modifier(false) => {
-            if s.rec_pending == Some(e.code) {
-                s.rec_pending = None;
-                done(Some(Shortcut { code: e.code, mods: 0, name: pf::key_name(e) }));
-            } else if e.mods & (MOD_MASK | pf::FN) == 0 {
-                s.rec_pending = None;
-                s.rec_multi = false;
+            s.rec_held.retain(|(c, _)| *c != e.code);
+            if !s.rec_peak.is_empty() {
+                let peak = std::mem::take(&mut s.rec_peak);
+                if peak.len() == 1 {
+                    let (code, name) = peak.into_iter().next().unwrap();
+                    done(Some(Shortcut { code, mods: 0, name }));
+                } else {
+                    let (last_code, last_name) = peak.last().unwrap().clone();
+                    let mut mods = 0u8;
+                    for (c, _) in peak.iter().take(peak.len() - 1) {
+                        if let Some((f, _)) = pf::modifier(*c) {
+                            mods |= f;
+                        }
+                    }
+                    done(Some(Shortcut { code: last_code, mods, name: last_name }));
+                }
             }
         }
         KeyKind::Up => {}
@@ -372,6 +400,8 @@ fn record(sh: &Shared, s: &mut State, tx: &UnboundedSender<HotEvent>, e: &KeyEve
     if !sh.recording.load(Ordering::Relaxed) {
         s.rec_pending = None;
         s.rec_multi = false;
+        s.rec_held.clear();
+        s.rec_peak.clear();
     }
     true
 }
@@ -438,12 +468,55 @@ mod tests {
         assert!(valid_hold(&[ctrl]));
         assert!(valid_hold(&[ctrl, alt]));
         assert!(valid_hold(&[alt, k]));
-        assert!(!valid_hold(&[shift, k]));
-        assert!(!valid_hold(&[k]));
+        assert!(valid_hold(&[shift, k]));
+        assert!(valid_hold(&[k]));
         assert!(!valid_hold(&[]));
         assert!(valid_hold(&[pf::MOUSE_BASE + 4]));
         assert!(valid_hold(&[ctrl, pf::MOUSE_BASE + 2]));
-        assert!(!valid_hold(&[pf::MOUSE_BASE + 3, pf::MOUSE_BASE + 4]));
+    }
+
+    #[test]
+    fn records_and_triggers_alt_c_and_ctrl_shift_win() {
+        let ctrl = mod_code(pf::CTRL);
+        let alt = mod_code(pf::ALT);
+        let shift = mod_code(pf::SHIFT);
+        let meta = mod_code(pf::META);
+        let k = plain_key();
+
+        // 1. 录制 Alt + k
+        let sh = Shared::default();
+        sh.recording.store(true, Ordering::Relaxed);
+        let st = Arc::new(Mutex::new(State::default()));
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        handle(&sh, &st, &tx, &ev(KeyKind::Modifier(true), alt, pf::ALT));
+        handle(&sh, &st, &tx, &ev(KeyKind::Down, k, pf::ALT));
+        match rx.try_recv() {
+            Ok(HotEvent::Recorded(Some(sc))) => {
+                assert_eq!(sc.code, k);
+                assert_eq!(sc.mods, pf::ALT);
+            }
+            other => panic!("Alt+k record failed: {other:?}"),
+        }
+
+        // 2. 录制 Ctrl + Shift + Win 并触发
+        sh.recording.store(true, Ordering::Relaxed);
+        handle(&sh, &st, &tx, &ev(KeyKind::Modifier(true), ctrl, pf::CTRL));
+        handle(&sh, &st, &tx, &ev(KeyKind::Modifier(true), shift, pf::CTRL | pf::SHIFT));
+        handle(&sh, &st, &tx, &ev(KeyKind::Modifier(true), meta, pf::CTRL | pf::SHIFT | pf::META));
+        handle(&sh, &st, &tx, &ev(KeyKind::Modifier(false), meta, pf::CTRL | pf::SHIFT));
+        let sc = match rx.try_recv() {
+            Ok(HotEvent::Recorded(Some(sc))) => sc,
+            other => panic!("Ctrl+Shift+Win record failed: {other:?}"),
+        };
+        assert!(sc.is_mod_combo());
+        assert_eq!(sc.mod_combo_mask(), Some(pf::CTRL | pf::SHIFT | pf::META));
+
+        // 触发 Ctrl + Shift + Win（即使按相反顺序 Win -> Shift -> Ctrl）
+        sh.config.write().unwrap().tap = Some(sc);
+        handle(&sh, &st, &tx, &ev(KeyKind::Modifier(true), meta, pf::META));
+        handle(&sh, &st, &tx, &ev(KeyKind::Modifier(true), shift, pf::META | pf::SHIFT));
+        handle(&sh, &st, &tx, &ev(KeyKind::Modifier(true), ctrl, pf::META | pf::SHIFT | pf::CTRL));
+        assert!(matches!(rx.try_recv(), Ok(HotEvent::Tap)));
     }
 
     #[test]
