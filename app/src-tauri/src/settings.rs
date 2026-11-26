@@ -182,6 +182,10 @@ pub struct Settings {
     pub hud_minimal: bool,
     /// 剪贴板保留策略：always | on_fail | on_success
     pub clipboard_mode: String,
+    /// 上屏前删除句末指定符号；默认开启
+    pub strip_trailing_enabled: bool,
+    /// 要从句末删除的符号集合（任意字符，如 "，。"）；支持用户自由增删
+    pub strip_trailing_chars: String,
 }
 
 impl Default for Settings {
@@ -218,6 +222,8 @@ impl Default for Settings {
             hud_enabled: true,
             hud_minimal: true,
             clipboard_mode: "on_fail".into(),
+            strip_trailing_enabled: true,
+            strip_trailing_chars: "，。".into(),
         }
     }
 }

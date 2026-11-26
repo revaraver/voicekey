@@ -489,10 +489,15 @@ fn should_paste(allowed: bool, force: bool) -> bool {
     allowed || force
 }
 
-/// 上屏前按设置去除标点；只用于真正写入焦点/剪贴板/历史的文字
-fn output_text(strip: bool, text: String) -> String {
-    if strip {
+/// 上屏前按设置去除标点与句末指定符号；只用于真正写入焦点/剪贴板/历史的文字
+fn output_text(strip: bool, strip_trailing_enabled: bool, strip_trailing_chars: &str, text: String) -> String {
+    let text = if strip {
         voicekey_core::util::strip_punctuation(&text)
+    } else {
+        text
+    };
+    if strip_trailing_enabled && !strip_trailing_chars.is_empty() {
+        text.trim_end_matches(|c: char| strip_trailing_chars.contains(c)).to_owned()
     } else {
         text
     }
@@ -500,8 +505,12 @@ fn output_text(strip: bool, text: String) -> String {
 
 /// 能输入（或开启强制上屏）就粘贴；否则只写剪贴板，并用和 insert() 相同的浮层提示。结果同时记入识别历史。
 fn deliver_text(app: &AppHandle, text: &str, ch: Channel) -> bool {
-    let strip = app.state::<AppState>().settings.read().unwrap().strip_punctuation;
-    let text = &output_text(strip, text.to_owned());
+    let (strip, strip_trailing_enabled, strip_trailing_chars) = {
+        let state = app.state::<AppState>();
+        let s = state.settings.read().unwrap();
+        (s.strip_punctuation, s.strip_trailing_enabled, s.strip_trailing_chars.clone())
+    };
+    let text = &output_text(strip, strip_trailing_enabled, &strip_trailing_chars, text.to_owned());
     if text.is_empty() {
         return false;
     }
@@ -565,7 +574,8 @@ impl Ctl {
     }
 
     fn output_text(&self, text: String) -> String {
-        output_text(self.settings.read().unwrap().strip_punctuation, text)
+        let s = self.settings.read().unwrap();
+        output_text(s.strip_punctuation, s.strip_trailing_enabled, &s.strip_trailing_chars, text)
     }
 
     fn handle(&mut self, m: Msg) {
