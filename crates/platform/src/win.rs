@@ -3,8 +3,11 @@ use crate::{HookFn, KeyEvent, KeyKind, MicStatus, Rect, ALT, CTRL, META, MOUSE_B
 use arboard::SetExtWindows;
 use std::sync::Mutex;
 use std::time::Duration;
-use windows::core::{Interface, PCWSTR};
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows::core::{Interface, PCWSTR, PWSTR};
+use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::System::Threading::{
+    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+};
 use windows::Win32::Graphics::Gdi::ClientToScreen;
 use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
 use windows::Win32::Media::Audio::{eMultimedia, eRender, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator};
@@ -360,11 +363,48 @@ pub fn has_text_target() -> bool {
         if uia_focused_editable() {
             return true;
         }
-        // 自绘终端与微信桌面端不提供标准 caret/UIA Edit，放行输入（后续仍有验证兜底）
+        // 自绘终端与主流自绘 IM（含新版 Qt 微信 4.0 Weixin.exe / NTQQ 等）不暴露标准 caret/UIA Edit，按类名或进程名放行
         if matches!(fg_cls.as_str(), "CASCADIA_HOSTING_WINDOW_CLASS" | "ConsoleWindowClass" | "WeChatMainWndForPC" | "ChatWnd") {
             return true;
         }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(fg, Some(&mut pid));
+        if let Some(pname) = process_name(pid) {
+            if matches!(
+                pname.as_str(),
+                "weixin.exe"
+                    | "wechat.exe"
+                    | "wechatappex.exe"
+                    | "qq.exe"
+                    | "telegram.exe"
+                    | "windowsterminal.exe"
+                    | "feishu.exe"
+                    | "lark.exe"
+                    | "dingtalk.exe"
+            ) {
+                return true;
+            }
+        }
         false
+    }
+}
+
+fn process_name(pid: u32) -> Option<String> {
+    if pid == 0 {
+        return None;
+    }
+    unsafe {
+        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut buf = [0u16; 512];
+        let mut len = buf.len() as u32;
+        let ok = QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut len).is_ok();
+        let _ = CloseHandle(h);
+        if !ok || len == 0 {
+            return None;
+        }
+        let full = String::from_utf16_lossy(&buf[..len as usize]);
+        let base = full.rsplit('\\').next()?;
+        Some(base.to_ascii_lowercase())
     }
 }
 
