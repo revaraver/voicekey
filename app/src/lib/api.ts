@@ -40,7 +40,7 @@ export interface Settings {
   autostart: boolean; theme: string; lowerSystemVolume: boolean; lowerSystemVolumePercent: number; onboarded: boolean;
   jev: JevConfig; llm: LlmConfig; historyEnabled: boolean; historyLimit: number; stripPunctuation: boolean;
   forcePasteWithoutTarget: boolean; hudEnabled: boolean; hudMinimal: boolean; clipboardMode: "always" | "on_fail" | "on_success";
-  stripTrailingEnabled: boolean; stripTrailingChars: string;
+  stripTrailingEnabled: boolean; stripTrailingChars: string; hardwareAcceleration: boolean;
 }
 export interface HistoryEntry { text: string; ts: number; channel: Channel; delivered: boolean }
 export interface HistoryView { items: HistoryEntry[]; sel: number; enabled: boolean }

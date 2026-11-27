@@ -10,6 +10,13 @@
   const u = $derived(app.update);
   const THEMES: [string, string][] = [["system", "跟随系统"], ["light", "浅色"], ["dark", "深色"]];
 
+  let needRestart = $state(false);
+
+  function toggleHardwareAcceleration() {
+    save({ hardwareAcceleration: !s.hardwareAcceleration });
+    needRestart = true;
+  }
+
   onMount(() => {
     const iv = setInterval(refreshPerms, 1000);
     return () => clearInterval(iv);
@@ -23,6 +30,15 @@
     <div class="lbl">开机自动启动</div>
     <button class="sw" class:on={s.autostart} onclick={() => save({ autostart: !s.autostart })} aria-label="开机自动启动"></button>
   </div>
+  {#if info.platform === "win"}
+    <div class="row">
+      <div class="lbl">硬件加速（GPU 渲染）<small>关闭后界面与悬浮窗完全走 CPU 软件渲染，不占用显卡（修改后需重启生效）</small></div>
+      {#if needRestart}
+        <button class="btn pri" onclick={() => call("restart_app")}>立即重启</button>
+      {/if}
+      <button class="sw" class:on={s.hardwareAcceleration} onclick={toggleHardwareAcceleration} aria-label="硬件加速"></button>
+    </div>
+  {/if}
   <div class="row">
     <div class="lbl">界面外观</div>
     <div class="segc">

@@ -323,11 +323,17 @@ fn llm_preview_prompt(config: voicekey_core::llm::Config) -> voicekey_core::llm:
     voicekey_core::llm::preview_prompt(&config, &cands, "内置示例")
 }
 
+#[tauri::command]
+fn restart_app(app: AppHandle) {
+    app.restart();
+}
+
 fn main() {
     if let Some(code) = offline::worker_main() {
         std::process::exit(code);
     }
     let settings = Settings::load();
+    ui::set_startup_gpu(settings.hardware_acceleration);
     let first_run = !settings.onboarded;
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| ui::show_settings(app)))
@@ -337,7 +343,7 @@ fn main() {
             get_state, set_settings, perm_status, perm_action, microphones, record_shortcut,
             pick_choose, pick_choose_final, pick_key, pick_resize, compare_toggle, meter, open_url, model_download,
             update_check, update_install, jev_test, llm_test, llm_check_url, llm_preview_prompt,
-            preview_sound, list_sounds,
+            preview_sound, list_sounds, restart_app,
             account_save, account_login, account_logout, get_recognition_history, clear_recognition_history
         ])
         .setup(move |app| {

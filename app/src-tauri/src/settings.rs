@@ -186,6 +186,8 @@ pub struct Settings {
     pub strip_trailing_enabled: bool,
     /// 要从句末删除的符号集合（任意字符，如 "，。"）；支持用户自由增删
     pub strip_trailing_chars: String,
+    /// WebView2 硬件加速（GPU 渲染）；默认关闭以纯 CPU 运行、不抢占显卡
+    pub hardware_acceleration: bool,
 }
 
 impl Default for Settings {
@@ -224,6 +226,7 @@ impl Default for Settings {
             clipboard_mode: "on_fail".into(),
             strip_trailing_enabled: true,
             strip_trailing_chars: "，。".into(),
+            hardware_acceleration: false,
         }
     }
 }

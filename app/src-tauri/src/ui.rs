@@ -81,8 +81,22 @@ fn cursor_area<R: Runtime>(app: &AppHandle<R>) -> Option<Area> {
     Some(work_area(&m))
 }
 
+static STARTUP_GPU: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_startup_gpu(enabled: bool) {
+    STARTUP_GPU.store(enabled, Ordering::Relaxed);
+}
+
+pub fn apply_browser_args<'a, R: Runtime, M: Manager<R>>(b: WebviewWindowBuilder<'a, R, M>) -> WebviewWindowBuilder<'a, R, M> {
+    #[cfg(windows)]
+    if !STARTUP_GPU.load(Ordering::Relaxed) {
+        return b.additional_browser_args("--disable-gpu --disable-gpu-compositing --disable-direct-composition");
+    }
+    b
+}
+
 fn overlay<R: Runtime>(app: &AppHandle<R>, label: &str, w: f64, h: f64) -> tauri::Result<WebviewWindow<R>> {
-    WebviewWindowBuilder::new(app, label, WebviewUrl::App("index.html".into()))
+    apply_browser_args(WebviewWindowBuilder::new(app, label, WebviewUrl::App("index.html".into())))
         .initialization_script(format!("window.__VK_VIEW = {label:?};"))
         .title(label)
         .transparent(true)
@@ -138,7 +152,7 @@ pub fn show_settings<R: Runtime>(app: &AppHandle<R>) {
         let _ = w.set_focus();
         return;
     }
-    let b = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+    let b = apply_browser_args(WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into())))
         .initialization_script("window.__VK_VIEW = \"settings\";")
         .title("VoiceKey 设置")
         .inner_size(860.0, 600.0)

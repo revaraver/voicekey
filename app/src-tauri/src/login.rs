@@ -50,7 +50,7 @@ pub fn open(app: &AppHandle, ch: Channel) -> Result<(), String> {
         let _ = w.set_focus();
         return Ok(());
     }
-    let w = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(Url::parse(login.page).map_err(|e| e.to_string())?))
+    let w = crate::ui::apply_browser_args(WebviewWindowBuilder::new(app, &label, WebviewUrl::External(Url::parse(login.page).map_err(|e| e.to_string())?)))
         .title(format!("登录{}（完成后自动关闭）", ch.title()))
         .inner_size(480.0, 720.0)
         .center()
